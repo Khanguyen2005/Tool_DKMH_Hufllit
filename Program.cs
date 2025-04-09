@@ -75,7 +75,7 @@ namespace ToolDKMH
 
                         string url = $"https://dkmh.huflit.edu.vn/DangKyHocPhan/DanhSachLopHocPhan?id={encodedId}&registType=KH";
                         var html = await client.GetStringAsync(url);
-                        await Task.Delay(200); // ✅ tránh lỗi timing khi tải HTML
+                        await Task.Delay(200);
 
                         string lhpEncoded = AutoDKHelper.FindFirstAvailableLHP(html, mon.MaLHPs);
                         if (lhpEncoded == null)
@@ -92,7 +92,6 @@ namespace ToolDKMH
                             Console.ForegroundColor = ConsoleColor.Green;
                             Console.WriteLine("✅ Đăng ký thành công!");
 
-                            // Kiểm tra kết quả trong danh sách đã đăng ký
                             var kq = await client.GetStringAsync("https://dkmh.huflit.edu.vn/DangKyHocPhan/KetQuaDangKy/1");
                             if (mon.MaLHPs.Any(m => kq.Contains(m)))
                             {
@@ -128,18 +127,69 @@ namespace ToolDKMH
 
     static class AutoDKHelper
     {
-        private static readonly Dictionary<string, string> MaHPToEncodedId = new()
-        {
-            { "1010472", "+8zRAlMtdfOZBRNZgYXmCQ==" }
-        };
-
         public static async Task<string> GetEncodedIdFromHP(HttpClient client, string maHP)
         {
-            if (MaHPToEncodedId.TryGetValue(maHP, out var encoded))
-                return encoded;
+            string url = "https://dkmh.huflit.edu.vn/DangKyHocPhan/DanhSachHocPhan?typeId=KH";
 
-            return null;
+            try
+            {
+                var response = await client.GetAsync(url);
+                if (!response.IsSuccessStatusCode)
+                {
+                    Console.WriteLine($"❌ Không thể tải trang: {response.StatusCode}");
+                    return null;
+                }
+
+                var html = await response.Content.ReadAsStringAsync();
+                HtmlDocument doc = new HtmlDocument();
+                doc.LoadHtml(html);
+
+                // ✅ Tìm bảng chứa danh sách học phần chính xác hơn
+                var rows = doc.DocumentNode
+                              .SelectSingleNode("//div[@id='DanhSachLop']//table")
+                              ?.SelectNodes(".//tr");
+
+                if (rows == null)
+                {
+                    Console.WriteLine("❌ Không tìm thấy bảng danh sách học phần.");
+                    return null;
+                }
+
+                foreach (var row in rows)
+                {
+                    var cells = row.SelectNodes("td");
+                    if (cells == null || cells.Count < 2) continue;
+
+                    string foundMaHP = WebUtility.HtmlDecode(cells[1].InnerText.Trim());
+                    if (foundMaHP == maHP)
+                    {
+                        var link = cells.Last().SelectSingleNode(".//a");
+                        if (link != null)
+                        {
+                            string href = WebUtility.HtmlDecode(link.GetAttributeValue("href", ""));
+                            var match = System.Text.RegularExpressions.Regex.Match(href, @"GetClassStudyUnit\('([^']+)'");
+                            if (match.Success)
+                            {
+                                return WebUtility.UrlEncode(match.Groups[1].Value);
+                            }
+                        }
+                    }
+                }
+
+                Console.WriteLine("⚠️ Không tìm thấy học phần phù hợp.");
+                return null;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"❌ Lỗi khi xử lý: {ex.Message}");
+                return null;
+            }
         }
+
+
+
+
+
 
         public static string FindFirstAvailableLHP(string html, string[] maLHPs)
         {
@@ -169,6 +219,7 @@ namespace ToolDKMH
                 string maLHP = WebUtility.HtmlDecode(columns[2].InnerText.Trim());
                 string slCon = WebUtility.HtmlDecode(columns[4].InnerText.Trim());
 
+                Console.WriteLine($"👉 LHP: {maLHP}, SL còn: {slCon}");
 
                 if (maLHPs.Contains(maLHP) && int.TryParse(slCon, out int soLuong) && soLuong > 0)
                     return WebUtility.UrlEncode(id);
